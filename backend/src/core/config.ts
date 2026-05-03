@@ -5,7 +5,7 @@ export type ModelProvider = "mimo" | "openai";
 export const config = {
   mimo: {
     apiKey: process.env.MIMO_API_KEY || "",
-    apiBase: process.env.MIMO_API_BASE || "https://api.xiaomimimo.com/v1",
+    apiBase: process.env.MIMO_API_BASE || "https://token-plan-cn.xiaomimimo.com/v1",
   },
   openai: {
     apiKey: process.env.OPENAI_API_KEY || "",
