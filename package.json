@@ -1,0 +1,13 @@
+{
+  "name": "heistmind",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "build:frontend": "cd frontend && npm ci && npm run build",
+    "build:backend": "cd backend && npm ci && npm run build",
+    "build": "npm run build:frontend && npm run build:backend && node scripts/copy-build.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
