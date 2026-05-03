@@ -81,5 +81,10 @@ export interface ActionResult {
   clue?: Clue;
   npc_response?: string;
   error?: string;
+  target_name?: string;
+  votes_count?: number;
+  total_players?: number;
+  verdict?: string;
+  all_voted?: boolean;
   [key: string]: unknown;
 }

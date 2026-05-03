@@ -67,6 +67,14 @@ export function registerGameRoutes(app: FastifyInstance): void {
     return game;
   });
 
+  // 获取投票状态
+  app.get("/api/v1/games/:gameId/votes", async (req, reply) => {
+    const { gameId } = req.params as { gameId: string };
+    const game = gameService.getGame(gameId);
+    if (!game) return reply.status(404).send({ detail: "游戏不存在" });
+    return { phase: game.phase, total_players: Object.keys(game.players).length };
+  });
+
   // 开始游戏
   app.post("/api/v1/games/:gameId/start", async (req, reply) => {
     const { gameId } = req.params as { gameId: string };

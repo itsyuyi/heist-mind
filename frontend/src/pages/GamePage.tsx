@@ -120,15 +120,24 @@ export default function GamePage() {
         addMessage({ speaker: '⚠️ 系统', content: result.error, type: 'error' });
       }
 
+      // 投票结果
+      if (result.verdict) {
+        addMessage({ speaker: '⚖️ 投票揭晓', content: String(result.verdict), type: 'gm' });
+      }
+      if (result.votes_count !== undefined) {
+        addMessage({
+          speaker: '🗳️ 投票进度',
+          content: `已有 ${result.votes_count}/${result.total_players} 人投票`,
+          type: 'system',
+        });
+      }
+
       // 检查蝴蝶效应
       for (const key of Object.keys(result)) {
-        if (key.startsWith('npc_') && key.endsWith('_reaction')) {
-          const npcId = key.replace('npc_', '').replace('_reaction', '');
-          const char = script?.characters.find(
-            (c: CharacterCard) => c.id === game?.npcs?.[npcId]?.character_id,
-          );
+        if (key.startsWith('butterfly_')) {
+          const name = key.replace('butterfly_', '');
           addMessage({
-            speaker: `🦋 ${char?.name || npcId}`,
+            speaker: `🦋 ${name}`,
             content: String(result[key]),
             type: 'npc',
           });

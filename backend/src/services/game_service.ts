@@ -101,6 +101,10 @@ export class GameService {
       is_ready: false,
     };
     game.players[playerId] = player;
+    
+    // 同步 Soul Engine 中的 NPC 状态
+    soulEngine.initFromGame(game, script.characters);
+    
     return player;
   }
 
@@ -111,7 +115,38 @@ export class GameService {
   async startGame(gameId: string): Promise<GameState> {
     const game = this.games.get(gameId);
     if (!game) throw new Error(`游戏 ${gameId} 不存在`);
+    
+    const script = this.scripts.get(game.script_id);
+    if (!script) throw new Error("剧本不存在");
+    
     game.phase = "intro";
+    
+    // 生成开场 AI 描述
+    const intro = await gameMaster.getRoundIntro(script, game);
+    game.chat_history.push({
+      round: 0,
+      type: "gm_intro",
+      speaker: "Game Master",
+      content: intro,
+      timestamp: Date.now(),
+    });
+    
+    // 进入第一轮
+    game.current_round = 1;
+    game.phase = "playing";
+    
+    const round1Intro = await gameMaster.getRoundIntro(script, game);
+    game.chat_history.push({
+      round: 1,
+      type: "gm_round",
+      speaker: "Game Master",
+      content: `**第 1 轮** ${round1Intro}`,
+      timestamp: Date.now(),
+    });
+    
+    // 初始化 Soul Engine
+    soulEngine.initFromGame(game, script.characters);
+    
     return game;
   }
 
@@ -145,31 +180,49 @@ export class GameService {
       );
       result.npc_response = npcResponse;
 
-      // 蝴蝶效应
+      // 更新游戏中的 NPC 状态（同步情绪变化）
+      const npcStates = soulEngine.getNPCStates();
+      for (const [npcId, state] of Object.entries(npcStates)) {
+        if (game.npcs[npcId]) {
+          game.npcs[npcId].mood = state.mood;
+          game.npcs[npcId].strategy = state.strategy;
+        }
+      }
+
+      // 蝴蝶效应：其他 NPC 可能对这次对话产生反应
       for (const npcId of Object.keys(game.npcs)) {
         if (npcId !== action.target_id) {
           const triggered = await soulEngine.npcInteract(
             action.target_id,
             npcId,
-            `玩家向 ${action.target_id} 说了：${action.content.slice(0, 50)}...`,
+            `玩家向某人说了：${action.content.slice(0, 40)}...`,
             game.chat_history,
           );
           if (triggered) {
-            result[`npc_${npcId}_reaction`] = triggered;
-            break;
+            const char = script.characters.find(
+              (c) => c.id === game.npcs[npcId].character_id,
+            );
+            result[`butterfly_${char?.name || npcId}`] = triggered;
           }
         }
       }
     }
 
+    // 投票 → 检查是否有裁决结果
+    if (action.action_type === "vote" && gmResult.verdict) {
+      result.verdict = gmResult.verdict;
+      result.all_voted = true;
+    }
+
     // 记录聊天历史
     game.chat_history.push({
       round: game.current_round,
+      timestamp: Date.now(),
       player_id: action.player_id,
       action_type: action.action_type,
       target_id: action.target_id,
       content: action.content,
-      result: result.narrative || "",
+      result: result.narrative || result.npc_response || "",
     });
 
     return result;
@@ -183,17 +236,67 @@ export class GameService {
     if (!script) throw new Error("剧本不存在");
 
     game.current_round += 1;
+    
     if (game.current_round > script.rounds) {
       game.phase = "voting";
-      return { phase: "voting", message: "请所有玩家进行最终投票！" };
+      const roundEndMsg = {
+        round: game.current_round - 1,
+        type: "gm_round",
+        speaker: "Game Master",
+        content: "所有轮次已结束。请所有玩家进行最终投票，指认你认为的真凶！",
+        timestamp: Date.now(),
+      };
+      game.chat_history.push(roundEndMsg);
+      return {
+        phase: "voting",
+        message: "所有轮次已结束，请投票！",
+        intro: "请所有玩家进行最终投票，指认你认为的真凶！",
+      };
     }
 
-    if (game.current_round === 1) {
-      game.phase = "playing";
+    // 生成下一轮的 AI 描述
+    const intro = await gameMaster.getRoundIntro(script, game);
+    game.chat_history.push({
+      round: game.current_round,
+      type: "gm_round",
+      speaker: "Game Master",
+      content: `**第 ${game.current_round} 轮** ${intro}`,
+      timestamp: Date.now(),
+    });
+
+    // NPC 自主发言（随机触发 1-2 个 NPC 对局势发表看法）
+    const npcIds = Object.keys(game.npcs);
+    const shuffled = npcIds.sort(() => Math.random() - 0.5);
+    const npcChatter: string[] = [];
+    soulEngine.initFromGame(game, script.characters);
+    
+    for (let i = 0; i < Math.min(2, shuffled.length); i++) {
+      try {
+        const chat = await soulEngine.npcAutonomousChat(
+          shuffled[i],
+          `新一轮开始了，你有什么想说的吗？`,
+        );
+        if (chat) {
+          npcChatter.push(chat);
+          game.chat_history.push({
+            round: game.current_round,
+            type: "npc_auto",
+            speaker: script.characters.find(
+              (c) => c.id === game.npcs[shuffled[i]].character_id,
+            )?.name || shuffled[i],
+            content: chat,
+            timestamp: Date.now(),
+          });
+        }
+      } catch { /* ignore NPC chat errors */ }
     }
 
-    const intro = gameMaster.getRoundIntro(script, game);
-    return { phase: game.phase, round: game.current_round, intro };
+    return {
+      phase: game.phase,
+      round: game.current_round,
+      intro,
+      npc_chatter: npcChatter,
+    };
   }
 
   async endGame(gameId: string): Promise<Record<string, unknown>> {
@@ -201,9 +304,19 @@ export class GameService {
     if (!game) throw new Error(`游戏 ${gameId} 不存在`);
 
     const script = this.scripts.get(game.script_id);
+    if (!script) throw new Error("剧本不存在");
+    
     game.phase = "ended";
 
-    const recap = await gameMaster.generateRecap(script!, game);
+    const recap = await gameMaster.generateRecap(script, game);
+    game.chat_history.push({
+      round: game.current_round,
+      type: "gm_end",
+      speaker: "Game Master",
+      content: "游戏结束！",
+      timestamp: Date.now(),
+    });
+
     return { phase: "ended", recap };
   }
 }
